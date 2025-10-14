@@ -1,4 +1,4 @@
-const {deviceEndpoints, numeric} = require('zigbee-herdsman-converters/lib/modernExtend');
+const {deviceEndpoints, sensor} = require('zigbee-herdsman-converters/lib/modernExtend');
 
 const definition = {
     zigbeeModel: ['esp32c6'],
@@ -6,7 +6,7 @@ const definition = {
     vendor: 'ESPRESSIF',
     description: 'Ultrasonic distance sensor. Use reporting minimum interval to set sample period in seconds. Reportable change is measured in 0.01 cm.',
     extend: [
-        numeric({
+        sensor({
             name: 'Distance',
             cluster: 'msIlluminanceMeasurement',
             attribute: 'measuredValue',
