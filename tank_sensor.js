@@ -12,11 +12,10 @@ const definition = {
             attribute: 'measuredValue',
             description: 'Distance',
             unit: 'cm',
-            access: 'ALL',
+            access: 'STATE_GET',
             precision: 2,
             scale: 100,
-            reporting: {min: 5, max: 0, change: 100},
-            access: 'STATE_GET'
+            reporting: {min: 5, max: 0, change: 100}
         })
     ],
     meta: {},
