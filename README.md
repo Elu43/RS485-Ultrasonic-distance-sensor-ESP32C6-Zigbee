@@ -1,7 +1,7 @@
 # RS485 A02 ultrasonic distance sensor ESP32C6 XIAO → Zigbee2MQTT
 
 This project is an adaptation of the original **esp32c6_zigbee_ultrasonic_distance_sensor** by Aralox (many thanks to him)
-to support the RS485 version of the sensor. Aralox did all the work and this forked project is 100% adapted by AI, please check his repo for more informations. I'm not a developer, AI probably made things the wrong way, but it works for my hobbyist use case.
+to support the RS485 version of the sensor. Aralox did all the work and this forked project is 99% adapted by AI, please check his repo for more informations. I'm not a developer, AI probably made things the wrong way, but it works for my hobbyist use case.
 
 ---
 
@@ -9,12 +9,12 @@ to support the RS485 version of the sensor. Aralox did all the work and this for
 - XIAO ESP32-C6
 - A02 Ultrasonic Sensor (RS485)
 - Seeed Studio XIAO-RS485-Expansion-Board
-- External Zigbee antenna (enabled in this code, modify it if you don't use it)
+- Official external antenna (enabled in this code, modify it if you don't use it)
 
 ---
 
 ## Pin Mapping
-| Sensor wires | RS485-Expansion-Board |
+| A02 sensor wires | RS485-Expansion-Board |
 |--------|------|
 | Red | 5V |
 | Black | GND |
@@ -46,3 +46,16 @@ good compatibility and reliable reporting.
 
 ### In menuconfig :
 Make sure to enable Zigbee as endpoint, and custom partition table pointing to partition.csv 
+
+---
+
+## In zigbee2mqtt configuration.yaml folder :
+Copy tank_sensor.js to zigbee2mqtt/external_converters and restart z2m before pairing.
+
+---
+
+## Default Measurement & Reporting Behavior
+
+Measurement interval: 5 seconds
+Reportable change: 10 mm
+Values are smoothed using a moving average (5 samples)
