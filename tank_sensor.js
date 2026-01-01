@@ -1,22 +1,22 @@
-const {deviceEndpoints, numeric} = require('zigbee-herdsman-converters/lib/modernExtend');
+const {numeric} = require('zigbee-herdsman-converters/lib/modernExtend');
 
 const definition = {
-    zigbeeModel: ['esp32c6'],
-    model: 'esp32c6',
-    vendor: 'ESPRESSIF',
-    description: 'Ultrasonic distance sensor. Use reporting minimum interval to set sample period in seconds. Reportable change is measured in 0.01 cm.',
+    zigbeeModel: ['esp32c6'],  // modelId annoncé par le firmware (CONFIG_IDF_TARGET)
+    model: 'esp32c6_a02_rs485',
+    vendor: 'DIY',
+    description: 'A02 RS485 Modbus distance sensor on ESP32-C6 (XIAO). Distance is published in mm via msIlluminanceMeasurement/measuredValue.',
     extend: [
         numeric({
-            name: 'Distance',
+            name: 'distance',
             cluster: 'msIlluminanceMeasurement',
             attribute: 'measuredValue',
             description: 'Distance',
-            unit: 'cm',
+            unit: 'mm',
             access: 'STATE_GET',
-            precision: 2,
-            scale: 100,
-            reporting: {min: 5, max: 0, change: 100}
-        })
+            precision: 0,
+            scale: 1,
+            reporting: {min: 5, max: 0, change: 50}, // min=5s; change=50mm (modifiable depuis Z2M)
+        }),
     ],
     meta: {},
 };
