@@ -37,7 +37,7 @@ static const uint8_t MODBUS_REQ_READ_DISTANCE[] = {0x01, 0x03, 0x01, 0x01, 0x00,
 #define ATTRIBUTE_ID ESP_ZB_ZCL_ATTR_ILLUMINANCE_MEASUREMENT_MEASURED_VALUE_ID
 
 // Reporting parameters (can be updated from Z2M; persisted in NVS)
-static uint16_t mm_delta = 50;        // reportable change in millimeters
+static uint16_t mm_delta = 10;        // reportable change in millimeters
 static uint16_t sample_period_s = 5;  // sampling/reporting period in seconds
 
 // -------------------- Smoothing (moving average) --------------------
