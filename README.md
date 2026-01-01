@@ -45,7 +45,7 @@ good compatibility and reliable reporting.
 - ESP Zigbee SDK (automatically downloaded via the IDF component manager)
 
 ### In menuconfig :
-Make sure to enable Zigbee as endpoint, and custom partition table pointing to partition.csv 
+Make sure to enable Zigbee as endpoint, and custom partition table pointing to partitions.csv 
 
 ---
 
