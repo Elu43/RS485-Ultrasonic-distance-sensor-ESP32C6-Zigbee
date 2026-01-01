@@ -7,4 +7,4 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/switch_driver
     )
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(tank_sensor)
+project(tank_sensor_a02_rs485)
