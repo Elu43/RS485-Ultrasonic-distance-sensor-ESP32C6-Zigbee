@@ -1,8 +1,10 @@
-// Router config based on esp-zigbee-sdk-main\examples\esp_zigbee_HA_sample\HA_color_dimmable_light\main\esp_zb_light.h
+#pragma once
+
+// Router config based on esp-zigbee-sdk examples
 /* Zigbee configuration */
 #define INSTALLCODE_POLICY_ENABLE       false        /* enable the install code policy for security */
-#define MAX_CHILDREN                    10          /* the max amount of connected devices */
-#define ESP_ZB_PRIMARY_CHANNEL_MASK     ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK    /* Zigbee primary channel mask use in the example */
+#define MAX_CHILDREN                    10           /* the max amount of connected devices */
+#define ESP_ZB_PRIMARY_CHANNEL_MASK     ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK /* Zigbee primary channel mask */
 
 /* Attribute values in ZCL string format
  * The string should be started with the length of its own.
