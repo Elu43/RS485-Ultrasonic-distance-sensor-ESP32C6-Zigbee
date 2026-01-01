@@ -28,6 +28,32 @@ const static char *TAG = "tank_sensor_a02_rs485";
 #define RS485_DE_GPIO       GPIO_NUM_2     // DE/RE enable pin (TX when HIGH, RX when LOW)
 #define RS485_BAUDRATE      9600
 
+// -------------------- RF switch (XIAO ESP32-C6 external antenna) --------------------
+// Seeed doc: GPIO3 must be LOW to enable RF switch control, then GPIO14 selects antenna.
+// GPIO14 LOW = internal ceramic antenna (default)
+// GPIO14 HIGH = external antenna
+static void xiao_enable_external_antenna(void)
+{
+    // Enable RF switch control via GPIO3
+    gpio_config_t io_conf3 = {
+        .mode = GPIO_MODE_OUTPUT,
+        .pin_bit_mask = 1ULL << GPIO_NUM_3,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf3));
+    gpio_set_level(GPIO_NUM_3, 0);
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Select external antenna via GPIO14
+    gpio_config_t io_conf14 = {
+        .mode = GPIO_MODE_OUTPUT,
+        .pin_bit_mask = 1ULL << GPIO_NUM_14,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf14));
+    gpio_set_level(GPIO_NUM_14, 1);
+}
+
+
 // Modbus request used in your Arduino sketch:
 // 01 03 01 01 00 01 D4 36  -> read holding register 0x0101, qty=1, slave=1
 static const uint8_t MODBUS_REQ_READ_DISTANCE[] = {0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xD4, 0x36};
