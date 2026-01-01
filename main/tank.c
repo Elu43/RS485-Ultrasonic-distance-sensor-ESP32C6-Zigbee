@@ -53,7 +53,6 @@ static void xiao_enable_external_antenna(void)
     gpio_set_level(GPIO_NUM_14, 1);
 }
 
-
 // Modbus request used in your Arduino sketch:
 // 01 03 01 01 00 01 D4 36  -> read holding register 0x0101, qty=1, slave=1
 static const uint8_t MODBUS_REQ_READ_DISTANCE[] = {0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xD4, 0x36};
