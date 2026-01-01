@@ -483,6 +483,7 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK(nvs_flash_init());
+    xiao_enable_external_antenna();
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
 
     xTaskCreate(esp_zb_task, "Zigbee_main", 8192, NULL, 5, NULL);
