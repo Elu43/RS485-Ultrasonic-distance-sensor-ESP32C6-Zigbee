@@ -15,7 +15,7 @@ const definition = {
             access: 'STATE_GET',
             precision: 0,
             scale: 1,
-            reporting: {min: 5, max: 0, change: 50}, // min=5s; change=50mm (modifiable depuis Z2M)
+            reporting: {min: 5, max: 0, change: 10}, // min=5s; change=10mm (modifiable depuis Z2M)
         }),
     ],
     meta: {},
