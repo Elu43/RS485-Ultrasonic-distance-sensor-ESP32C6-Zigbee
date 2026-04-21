@@ -1,4 +1,3 @@
-\
 #include "tank.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -14,7 +13,7 @@
 
 #include "../switch_driver/include/switch_driver.h"
 
-const static char *TAG = "tank_sensor_a02_rs485";
+const static char *TAG = "tank_sensor_urm14_rs485";
 
 #if !defined CONFIG_ZB_ZCZR
 #error Define ZB_ZCZR in idf.py menuconfig to compile router source code.
@@ -26,7 +25,7 @@ const static char *TAG = "tank_sensor_a02_rs485";
 #define RS485_TX_GPIO       GPIO_NUM_22
 #define RS485_RX_GPIO       GPIO_NUM_23
 #define RS485_DE_GPIO       GPIO_NUM_2     // DE/RE enable pin (TX when HIGH, RX when LOW)
-#define RS485_BAUDRATE      9600
+#define RS485_BAUDRATE      19200
 
 // -------------------- RF switch (XIAO ESP32-C6 external antenna) --------------------
 // Seeed doc: GPIO3 must be LOW to enable RF switch control, then GPIO14 selects antenna.
@@ -34,7 +33,6 @@ const static char *TAG = "tank_sensor_a02_rs485";
 // GPIO14 HIGH = external antenna
 static void xiao_enable_external_antenna(void)
 {
-    // Enable RF switch control via GPIO3
     gpio_config_t io_conf3 = {
         .mode = GPIO_MODE_OUTPUT,
         .pin_bit_mask = 1ULL << GPIO_NUM_3,
@@ -44,7 +42,6 @@ static void xiao_enable_external_antenna(void)
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    // Select external antenna via GPIO14
     gpio_config_t io_conf14 = {
         .mode = GPIO_MODE_OUTPUT,
         .pin_bit_mask = 1ULL << GPIO_NUM_14,
@@ -53,17 +50,35 @@ static void xiao_enable_external_antenna(void)
     gpio_set_level(GPIO_NUM_14, 1);
 }
 
-// Modbus request used in your Arduino sketch:
-// 01 03 01 01 00 01 D4 36  -> read holding register 0x0101, qty=1, slave=1
-static const uint8_t MODBUS_REQ_READ_DISTANCE[] = {0x01, 0x03, 0x01, 0x01, 0x00, 0x01, 0xD4, 0x36};
+// -------------------- URM14 Modbus configuration --------------------
+#define URM14_SLAVE_ADDR        ((uint8_t)0x0C)
+
+#define URM14_REG_PID           0
+#define URM14_REG_VID           1
+#define URM14_REG_ADDR          2
+#define URM14_REG_COM_BAUDRATE  3
+#define URM14_REG_COM_PARITY    4
+#define URM14_REG_DISTANCE      5
+#define URM14_REG_INT_TEMP      6
+#define URM14_REG_EXT_TEMP      7
+#define URM14_REG_CONTROL       8
+#define URM14_REG_NOISE         9
+
+#define TEMP_CPT_SEL_BIT        ((uint16_t)0x01)
+#define TEMP_CPT_ENABLE_BIT     ((uint16_t)0x01 << 1)
+#define MEASURE_MODE_BIT        ((uint16_t)0x01 << 2)
+#define MEASURE_TRIG_BIT        ((uint16_t)0x01 << 3)
+
+static uint16_t urm14_control_reg = 0;
 
 // -------------------- Zigbee cluster/attribute used to publish distance --------------------
 #define CLUSTER_ID   ESP_ZB_ZCL_CLUSTER_ID_ILLUMINANCE_MEASUREMENT
 #define ATTRIBUTE_ID ESP_ZB_ZCL_ATTR_ILLUMINANCE_MEASUREMENT_MEASURED_VALUE_ID
 
 // Reporting parameters (can be updated from Z2M; persisted in NVS)
-static uint16_t mm_delta = 10;        // reportable change in millimeters
-static uint16_t sample_period_s = 5;  // sampling/reporting period in seconds
+// Units are 0.1 mm because URM14 distance register uses 0.1 mm per LSB.
+static uint16_t tenth_mm_delta = 10;   // 10 = 1.0 mm
+static uint16_t sample_period_s = 60;  // sampling/reporting period in seconds
 
 // -------------------- Smoothing (moving average) --------------------
 #define SAMPLE_COUNT 5
@@ -133,56 +148,132 @@ static inline void rs485_set_tx(bool tx)
     gpio_set_level(RS485_DE_GPIO, tx ? 1 : 0);
 }
 
-// Read A02 distance via Modbus RTU.
-// Returns true on success, and fills distance_mm.
-static bool a02_read_distance_mm(uint16_t *distance_mm)
+static bool modbus_write_single_register(uint8_t slave_addr, uint16_t reg_addr, uint16_t value)
 {
-    // Flush RX buffer before transaction
+    uint8_t req[8];
+    req[0] = slave_addr;
+    req[1] = 0x06; // Write Single Register
+    req[2] = (reg_addr >> 8) & 0xFF;
+    req[3] = reg_addr & 0xFF;
+    req[4] = (value >> 8) & 0xFF;
+    req[5] = value & 0xFF;
+
+    uint16_t crc = modbus_crc16(req, 6);
+    req[6] = crc & 0xFF;
+    req[7] = (crc >> 8) & 0xFF;
+
     uart_flush_input(RS485_UART_NUM);
 
-    // TX
     rs485_set_tx(true);
     vTaskDelay(pdMS_TO_TICKS(5));
 
-    uart_write_bytes(RS485_UART_NUM, (const char *)MODBUS_REQ_READ_DISTANCE, sizeof(MODBUS_REQ_READ_DISTANCE));
+    uart_write_bytes(RS485_UART_NUM, (const char *)req, sizeof(req));
     if (uart_wait_tx_done(RS485_UART_NUM, pdMS_TO_TICKS(100)) != ESP_OK) {
         rs485_set_tx(false);
         return false;
     }
 
-    // RX
     rs485_set_tx(false);
 
-    // Typical response for 1 register: 01 03 02 HI LO CRClo CRChi  -> 7 bytes
-    uint8_t buf[64];
-    int len = uart_read_bytes(RS485_UART_NUM, buf, sizeof(buf), pdMS_TO_TICKS(200));
-
-    if (len < 7) {
+    uint8_t resp[16];
+    int len = uart_read_bytes(RS485_UART_NUM, resp, sizeof(resp), pdMS_TO_TICKS(200));
+    if (len < 8) {
         return false;
     }
 
-    // Search for a valid frame start in the buffer
-    for (int i = 0; i <= len - 7; i++) {
-        if (buf[i] == 0x01 && buf[i + 1] == 0x03 && buf[i + 2] == 0x02) {
-
-            // Validate CRC for the 7-byte frame
-            uint16_t crc_calc = modbus_crc16(&buf[i], 5); // address..data (5 bytes)
-            uint16_t crc_rx = (uint16_t)buf[i + 5] | ((uint16_t)buf[i + 6] << 8); // low, high
+    for (int i = 0; i <= len - 8; i++) {
+        if (resp[i] == slave_addr && resp[i + 1] == 0x06) {
+            uint16_t crc_calc = modbus_crc16(&resp[i], 6);
+            uint16_t crc_rx = (uint16_t)resp[i + 6] | ((uint16_t)resp[i + 7] << 8);
             if (crc_calc != crc_rx) {
                 continue;
             }
-
-            uint16_t raw = ((uint16_t)buf[i + 3] << 8) | buf[i + 4];
-
-            // Convert raw register to millimeters:
-            // Many A02 RS485 firmwares return distance in millimeters. If yours differs, adapt here.
-            *distance_mm = raw;
-
             return true;
         }
     }
 
     return false;
+}
+
+static bool modbus_read_holding_register(uint8_t slave_addr, uint16_t reg_addr, uint16_t *value)
+{
+    uint8_t req[8];
+    req[0] = slave_addr;
+    req[1] = 0x03; // Read Holding Registers
+    req[2] = (reg_addr >> 8) & 0xFF;
+    req[3] = reg_addr & 0xFF;
+    req[4] = 0x00;
+    req[5] = 0x01; // read 1 register
+
+    uint16_t crc = modbus_crc16(req, 6);
+    req[6] = crc & 0xFF;
+    req[7] = (crc >> 8) & 0xFF;
+
+    uart_flush_input(RS485_UART_NUM);
+
+    rs485_set_tx(true);
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    uart_write_bytes(RS485_UART_NUM, (const char *)req, sizeof(req));
+    if (uart_wait_tx_done(RS485_UART_NUM, pdMS_TO_TICKS(100)) != ESP_OK) {
+        rs485_set_tx(false);
+        return false;
+    }
+
+    rs485_set_tx(false);
+
+    uint8_t resp[16];
+    int len = uart_read_bytes(RS485_UART_NUM, resp, sizeof(resp), pdMS_TO_TICKS(200));
+    if (len < 7) {
+        return false;
+    }
+
+    for (int i = 0; i <= len - 7; i++) {
+        if (resp[i] == slave_addr && resp[i + 1] == 0x03 && resp[i + 2] == 0x02) {
+            uint16_t crc_calc = modbus_crc16(&resp[i], 5);
+            uint16_t crc_rx = (uint16_t)resp[i + 5] | ((uint16_t)resp[i + 6] << 8);
+            if (crc_calc != crc_rx) {
+                continue;
+            }
+
+            *value = ((uint16_t)resp[i + 3] << 8) | resp[i + 4];
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool urm14_init_sensor(void)
+{
+    urm14_control_reg |= MEASURE_MODE_BIT;                 // trigger mode
+    urm14_control_reg &= ~(uint16_t)TEMP_CPT_SEL_BIT;      // internal temp
+    urm14_control_reg &= ~(uint16_t)TEMP_CPT_ENABLE_BIT;   // same as vendor example
+
+    return modbus_write_single_register(URM14_SLAVE_ADDR, URM14_REG_CONTROL, urm14_control_reg);
+}
+
+// Returns true on success, and fills distance_tenth_mm.
+// URM14 distance register unit = 0.1 mm per LSB.
+static bool urm14_read_distance_tenth_mm(uint16_t *distance_tenth_mm)
+{
+    uint16_t raw = 0;
+
+    // Trigger a measurement
+    uint16_t trigger_value = urm14_control_reg | MEASURE_TRIG_BIT;
+    if (!modbus_write_single_register(URM14_SLAVE_ADDR, URM14_REG_CONTROL, trigger_value)) {
+        return false;
+    }
+
+    // Vendor example waits 300 ms
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    if (!modbus_read_holding_register(URM14_SLAVE_ADDR, URM14_REG_DISTANCE, &raw)) {
+        return false;
+    }
+
+    *distance_tenth_mm = raw;
+    return true;
 }
 
 // -------------------- Zigbee reporting config --------------------
@@ -201,7 +292,7 @@ static void update_reporting()
         .u.send_info.def_min_interval = sample_period_s,
         .u.send_info.def_max_interval = 0,
 
-        .u.send_info.delta.u16 = mm_delta,
+        .u.send_info.delta.u16 = tenth_mm_delta,
         .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
     };
     esp_zb_zcl_update_reporting_info(&reporting_info);
@@ -224,22 +315,22 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
     esp_zb_zcl_reporting_info_t *report = esp_zb_zcl_find_reporting_info(filter);
     if (report != NULL)
     {
-        uint16_t new_mm_delta = report->u.send_info.delta.u16;
+        uint16_t new_tenth_mm_delta = report->u.send_info.delta.u16;
         uint16_t new_sample_period = report->u.send_info.min_interval;
 
-        if (new_mm_delta != mm_delta || new_sample_period != sample_period_s)
+        if (new_tenth_mm_delta != tenth_mm_delta || new_sample_period != sample_period_s)
         {
-            mm_delta = new_mm_delta;
+            tenth_mm_delta = new_tenth_mm_delta;
             sample_period_s = new_sample_period;
 
             nvs_handle_t my_handle;
             ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &my_handle));
-            ESP_ERROR_CHECK(nvs_set_u16(my_handle, "mm_delta", mm_delta));
+            ESP_ERROR_CHECK(nvs_set_u16(my_handle, "tenth_mm_delta", tenth_mm_delta));
             ESP_ERROR_CHECK(nvs_set_u16(my_handle, "sample_period_s", sample_period_s));
             ESP_ERROR_CHECK(nvs_commit(my_handle));
             nvs_close(my_handle);
 
-            ESP_LOGW(TAG, "Set new mm_delta: %u, sample_period_s: %u", mm_delta, sample_period_s);
+            ESP_LOGW(TAG, "Set new tenth_mm_delta: %u, sample_period_s: %u", tenth_mm_delta, sample_period_s);
         }
     }
 
@@ -293,9 +384,9 @@ static void load_config()
     bool didWrite = false;
     ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &my_handle));
 
-    if (nvs_get_u16(my_handle, "mm_delta", &mm_delta) == ESP_ERR_NVS_NOT_FOUND)
+    if (nvs_get_u16(my_handle, "tenth_mm_delta", &tenth_mm_delta) == ESP_ERR_NVS_NOT_FOUND)
     {
-        ESP_ERROR_CHECK(nvs_set_u16(my_handle, "mm_delta", mm_delta));
+        ESP_ERROR_CHECK(nvs_set_u16(my_handle, "tenth_mm_delta", tenth_mm_delta));
         didWrite = true;
     }
 
@@ -311,7 +402,7 @@ static void load_config()
     }
 
     nvs_close(my_handle);
-    ESP_LOGW(TAG, "Read from memory: mm_delta: %u, sample_period_s: %u", mm_delta, sample_period_s);
+    ESP_LOGW(TAG, "Read from memory: tenth_mm_delta: %u, sample_period_s: %u", tenth_mm_delta, sample_period_s);
 }
 
 // -------------------- Periodic task: read RS485 and publish to Zigbee --------------------
@@ -323,12 +414,13 @@ static void read_rs485_task(void *pvParameters)
 
     for (;;)
     {
-        uint16_t dist_mm = 0;
-        if (a02_read_distance_mm(&dist_mm))
+        uint16_t dist_tenth_mm = 0;
+        if (urm14_read_distance_tenth_mm(&dist_tenth_mm))
         {
-            uint16_t smooth = getMovingAverage(dist_mm);
+            uint16_t smooth = getMovingAverage(dist_tenth_mm);
 
-            ESP_LOGI(TAG, "Distance: %u mm (smoothed: %u)", dist_mm, smooth);
+            ESP_LOGI(TAG, "Distance: %.1f mm (raw=%u, smoothed=%u)",
+                     dist_tenth_mm / 10.0f, dist_tenth_mm, smooth);
 
             if (esp_zb_lock_acquire(portMAX_DELAY))
             {
@@ -340,7 +432,7 @@ static void read_rs485_task(void *pvParameters)
             }
         }
         else {
-            ESP_LOGW(TAG, "Failed to read A02 distance (RS485/Modbus)");
+            ESP_LOGW(TAG, "Failed to read URM14 distance (RS485/Modbus)");
         }
 
         vTaskDelay(pdMS_TO_TICKS(sample_period_s * 1000));
@@ -350,8 +442,7 @@ static void read_rs485_task(void *pvParameters)
 // -------------------- Deferred driver init (after Zigbee stack is ready) --------------------
 static esp_err_t deferred_driver_init(void)
 {
-    // UART init
-    ESP_LOGI(TAG, "Init RS485 UART (TX=GPIO22 RX=GPIO23 DE=GPIO2, 9600 8N1)");
+    ESP_LOGI(TAG, "Init RS485 UART for URM14 (TX=GPIO22 RX=GPIO23 DE=GPIO2, 19200 8N1)");
     uart_config_t uart_config = {
         .baud_rate = RS485_BAUDRATE,
         .data_bits = UART_DATA_8_BITS,
@@ -373,6 +464,9 @@ static esp_err_t deferred_driver_init(void)
     ESP_ERROR_CHECK(gpio_config(&io_conf));
     rs485_set_tx(false); // RX by default
 
+    // Init URM14 sensor
+    ESP_RETURN_ON_FALSE(urm14_init_sensor(), ESP_FAIL, TAG, "Failed to initialize URM14");
+
     // Init smoothing buffer
     for (int i = 0; i < SAMPLE_COUNT; ++i) {
         samples[i] = 0;
@@ -383,7 +477,7 @@ static esp_err_t deferred_driver_init(void)
                         ESP_FAIL, TAG, "Failed to initialize switch driver");
 
     // Start periodic RS485 read task
-    BaseType_t ret = xTaskCreate(read_rs485_task, "read_a02_rs485", 4096, NULL, 4, NULL);
+    BaseType_t ret = xTaskCreate(read_rs485_task, "read_urm14_rs485", 4096, NULL, 4, NULL);
     return (ret == pdTRUE) ? ESP_OK : ESP_FAIL;
 }
 
